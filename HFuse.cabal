@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a41e4839635a855ad1da20931deafdd7600f675d6466056bb1f2e42556d46b78
+-- hash: dcbf9b809504ec63cb69f8eb4d0675d493e124f6f525582f08ff91703f64c6c6
 
 name:           HFuse
 version:        0.2.5.0
@@ -34,10 +34,12 @@ flag developer
 library
   exposed-modules:
       System.Fuse
+      System.Fuse.Bindings
+      System.Fuse.Types
   other-modules:
       Paths_HFuse
-  default-extensions: ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
-  ghc-options: -fplugin=Polysemy.Plugin
+  default-extensions: ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls DataKinds FlexibleContexts GADTs LambdaCase PolyKinds RankNTypes TypeApplications TypeOperators TypeFamilies
+  ghc-options: -fplugin=Polysemy.Plugin -O2 -flate-specialise -fspecialise-aggressively
   cc-options: -D_FILE_OFFSET_BITS=64
   include-dirs:
       /usr/include
@@ -72,7 +74,7 @@ executable HelloFS
       Paths_HFuse
   hs-source-dirs:
       examples
-  ghc-options: -fplugin=Polysemy.Plugin -threaded
+  ghc-options: -fplugin=Polysemy.Plugin -O2 -flate-specialise -fspecialise-aggressively -threaded
   if flag(developer)
     build-depends:
         HFuse

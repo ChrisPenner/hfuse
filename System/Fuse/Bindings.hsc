@@ -23,40 +23,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE CPP #-}
-module System.Fuse
-    ( -- * Using FUSE
-
-      -- $intro
-
-      module Foreign.C.Error
-    , FuseOperations(..)
-    , defaultFuseOps
-    , fuseMain -- :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
-    , fuseRun -- :: String -> [String] -> FuseOperations fh -> (Exception -> IO Errno) -> IO ()
-
-    , fuseMainInline -- :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
-    , fuseRunInline -- :: String -> [String] -> FuseOperations fh -> (Exception -> IO Errno) -> IO ()
-    , defaultExceptionHandler -- :: Exception -> IO Errno
-      -- * Operations datatypes
-    , FileStat(..)
-    , EntryType(..)
-    , FileSystemStats(..)
-    , SyncType(..)
-      -- * FUSE Context
-    , getFuseContext -- :: IO FuseContext
-    , FuseContext(fuseCtxUserID, fuseCtxGroupID, fuseCtxProcessID)
-      -- * File modes
-    , entryTypeToFileMode -- :: EntryType -> FileMode
-    , fileModeToEntryType -- :: FileMode -> EntryType
-    , OpenMode(..)
-    , OpenFileFlags(..)
-    , intersectFileModes -- :: FileMode
-    , unionFileModes -- :: FileMode
+module System.Fuse.Bindings
+    ( fileStatToCStat
     ) where
 
 import Prelude hiding ( Read )
 
-import System.Fuse.Bindings
 import System.Fuse.Types
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -118,6 +90,30 @@ Read and writes are done with Haskell 'ByteString' type.
 {-  All operations should return the negated error value (-errno) on
       error.
 -}
+
+
+{- FIXME: I don't know how to determine the alignment of struct stat without
+ - making unportable assumptions about the order of elements within it.  Hence,
+ - FileStat is not an instance of Storable.  But it should be, rather than this
+ - next function existing!
+ -}
+
+fileStatToCStat :: FileStat -> Ptr CStat -> IO ()
+fileStatToCStat stat pStat = do
+    let mode = (entryTypeToFileMode (statEntryType stat)
+             `unionFileModes`
+               (statFileMode stat `intersectFileModes` accessModes))
+    let block_count = (fromIntegral (statBlocks stat) :: (#type blkcnt_t))
+    (#poke struct stat, st_mode)   pStat mode
+    (#poke struct stat, st_nlink)  pStat (statLinkCount  stat)
+    (#poke struct stat, st_uid)    pStat (statFileOwner  stat)
+    (#poke struct stat, st_gid)    pStat (statFileGroup  stat)
+    (#poke struct stat, st_rdev)   pStat (statSpecialDeviceID stat)
+    (#poke struct stat, st_size)   pStat (statFileSize   stat)
+    (#poke struct stat, st_blocks) pStat block_count
+    (#poke struct stat, st_atime)  pStat (statAccessTime stat)
+    (#poke struct stat, st_mtime)  pStat (statModificationTime stat)
+    (#poke struct stat, st_ctime)  pStat (statStatusChangeTime stat)
 
 
 entryTypeToDT :: EntryType -> Int
@@ -913,8 +909,224 @@ catch = catchIOError
 #else
 #endif
 
+-----------------------------------------------------------------------------
+-- C land
+
+---
+-- exported C called from Haskell
+---  
+
+data CFuseArgs -- struct fuse_args
+
+data CFuseChan -- struct fuse_chan
+foreign import ccall safe "fuse.h fuse_mount"
+    fuse_mount :: CString -> Ptr CFuseArgs -> IO (Ptr CFuseChan)
+
+foreign import ccall safe "fuse.h fuse_unmount"
+    fuse_unmount :: CString -> Ptr CFuseChan -> IO ()
+
+foreign import ccall unsafe "fuse_lowlevel.h fuse_chan_bufsize"
+    fuse_chan_bufsize :: Ptr CFuseChan -> IO Word
+
+foreign import ccall unsafe "fuse_lowlevel.h fuse_chan_fd"
+    fuse_chan_fd :: Ptr CFuseChan -> IO Fd
+
+data CFuseSession -- struct fuse_session
+foreign import ccall safe "fuse.h fuse_get_session"
+    fuse_get_session :: Ptr CStructFuse -> IO (Ptr CFuseSession)
+
+foreign import ccall safe "fuse.h fuse_session_exit"
+    fuse_session_exit :: Ptr CFuseSession -> IO ()
+
+foreign import ccall safe "fuse.h fuse_set_signal_handlers"
+    fuse_set_signal_handlers :: Ptr CFuseSession -> IO Int
+
+foreign import ccall safe "fuse.h fuse_remove_signal_handlers"
+    fuse_remove_signal_handlers :: Ptr CFuseSession -> IO ()
+
+foreign import ccall safe "fuse.h fuse_parse_cmdline"
+    fuse_parse_cmdline :: Ptr CFuseArgs -> Ptr CString -> Ptr Int -> Ptr Int -> IO Int
+
+foreign import ccall unsafe "fuse_lowlevel.h fuse_session_next_chan"
+    fuse_session_next_chan :: Ptr CFuseSession -> Ptr CFuseChan -> IO (Ptr CFuseChan)
+
+foreign import ccall safe "fuse.h fuse_new"
+    fuse_new :: Ptr CFuseChan -> Ptr CFuseArgs -> Ptr CFuseOperations -> Int -> Ptr () -> IO (Ptr CStructFuse)
+
+foreign import ccall safe "fuse.h fuse_destroy"
+    fuse_destroy :: Ptr CStructFuse -> IO ()
+
+foreign import ccall safe "fuse.h fuse_opt_free_args"
+    fuse_opt_free_args :: Ptr CFuseArgs -> IO ()
+
+foreign import ccall safe "fuse.h fuse_loop_mt"
+    fuse_loop_mt :: Ptr CStructFuse -> IO Int
+
+foreign import ccall safe "fuse.h fuse_loop"
+    fuse_loop :: Ptr CStructFuse -> IO Int
+
+data CFuseContext
+foreign import ccall safe "fuse.h fuse_get_context"
+    fuse_get_context :: IO (Ptr CFuseContext)
+
+data CFuseBuf
+foreign import ccall unsafe "fuse_lowlevel.h fuse_session_receive_buf"
+    fuse_session_receive_buf :: Ptr CFuseSession -> Ptr CFuseBuf -> Ptr (Ptr CFuseChan) -> IO ()
+
+foreign import ccall safe "fuse_lowlevel.h fuse_session_process_buf"
+    fuse_session_process_buf :: Ptr CFuseSession -> Ptr CFuseBuf -> Ptr CFuseChan -> IO ()
+
+---
+-- dynamic Haskell called from C
+---
+
+foreign import ccall safe "wrapper"
+    mkGetAttr :: CGetAttr -> IO (FunPtr CGetAttr)
+
+type CReadLink = CString -> CString -> CSize -> IO CInt
+foreign import ccall safe "wrapper"
+    mkReadLink :: CReadLink -> IO (FunPtr CReadLink)
+
+type CMkNod = CString -> CMode -> CDev -> IO CInt
+foreign import ccall safe "wrapper"
+    mkMkNod :: CMkNod -> IO (FunPtr CMkNod)
+
+type CMkDir = CString -> CMode -> IO CInt
+foreign import ccall safe "wrapper"
+    mkMkDir :: CMkDir -> IO (FunPtr CMkDir)
+
+type CUnlink = CString -> IO CInt
+foreign import ccall safe "wrapper"
+    mkUnlink :: CUnlink -> IO (FunPtr CUnlink)
+
+type CRmDir = CString -> IO CInt
+foreign import ccall safe "wrapper"
+    mkRmDir :: CRmDir -> IO (FunPtr CRmDir)
+
+type CSymLink = CString -> CString -> IO CInt
+foreign import ccall safe "wrapper"
+    mkSymLink :: CSymLink -> IO (FunPtr CSymLink)
+
+type CRename = CString -> CString -> IO CInt
+foreign import ccall safe "wrapper"
+    mkRename :: CRename -> IO (FunPtr CRename)
+
+type CLink = CString -> CString -> IO CInt
+foreign import ccall safe "wrapper"
+    mkLink :: CLink -> IO (FunPtr CLink)
+
+type CChMod = CString -> CMode -> IO CInt
+foreign import ccall safe "wrapper"
+    mkChMod :: CChMod -> IO (FunPtr CChMod)
+
+type CChOwn = CString -> CUid -> CGid -> IO CInt
+foreign import ccall safe "wrapper"
+    mkChOwn :: CChOwn -> IO (FunPtr CChOwn)
+
+type CTruncate = CString -> COff -> IO CInt
+foreign import ccall safe "wrapper"
+    mkTruncate :: CTruncate -> IO (FunPtr CTruncate)
+
+data CUTimBuf -- struct utimbuf
+type CUTime = CString -> Ptr CUTimBuf -> IO CInt
+foreign import ccall safe "wrapper"
+    mkUTime :: CUTime -> IO (FunPtr CUTime)
+
+type COpen = CString -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkOpen :: COpen -> IO (FunPtr COpen)
+
+type CRead = CString -> CString -> CSize -> COff -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkRead :: CRead -> IO (FunPtr CRead)
+
+type CWrite = CString -> CString -> CSize -> COff -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkWrite :: CWrite -> IO (FunPtr CWrite)
+
+data CStructStatVFS -- struct fuse_stat_fs
+type CStatFS = CString -> Ptr CStructStatVFS -> IO CInt
+foreign import ccall safe "wrapper"
+    mkStatFS :: CStatFS -> IO (FunPtr CStatFS)
+
+type CFlush = CString -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkFlush :: CFlush -> IO (FunPtr CFlush)
+
+type CRelease = CString -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkRelease :: CRelease -> IO (FunPtr CRelease)
+
+type CFSync = CString -> Int -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkFSync :: CFSync -> IO (FunPtr CFSync) 
+
+-- XXX add *xattr bindings
+
+type COpenDir = CString -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkOpenDir :: COpenDir -> IO (FunPtr COpenDir)
+
+type CReadDir = CString -> Ptr CFillDirBuf -> FunPtr CFillDir -> COff
+             -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkReadDir :: CReadDir -> IO (FunPtr CReadDir)
+
+type CReleaseDir = CString -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkReleaseDir :: CReleaseDir -> IO (FunPtr CReleaseDir)
+
+type CFSyncDir = CString -> Int -> Ptr CFuseFileInfo -> IO CInt
+foreign import ccall safe "wrapper"
+    mkFSyncDir :: CFSyncDir -> IO (FunPtr CFSyncDir)
+
+type CAccess = CString -> CInt -> IO CInt
+foreign import ccall safe "wrapper"
+    mkAccess :: CAccess -> IO (FunPtr CAccess)
+
+-- CInt because anything would be fine as we don't use them
+type CInit = Ptr CFuseConnInfo -> IO (Ptr CInt)
+foreign import ccall safe "wrapper"
+    mkInit :: CInit -> IO (FunPtr CInit)
+
+type CDestroy = Ptr CInt -> IO ()
+foreign import ccall safe "wrapper"
+    mkDestroy :: CDestroy -> IO (FunPtr CDestroy)
+
+----
+
 bsToBuf :: Ptr a -> B.ByteString -> Int -> IO ()
 bsToBuf dst bs len = do
   let l = fromIntegral $ min len $ B.length bs
   B.unsafeUseAsCString bs $ \src -> B.memcpy (castPtr dst) (castPtr src) l
   return ()
+
+-- Get filehandle
+getFH pFuseFileInfo = do
+  sptr <- (#peek struct fuse_file_info, fh) pFuseFileInfo
+  cVal <- deRefStablePtr $ castPtrToStablePtr sptr
+  return cVal
+
+delFH pFuseFileInfo = do
+  sptr <- (#peek struct fuse_file_info, fh) pFuseFileInfo
+  freeStablePtr $ castPtrToStablePtr sptr
+
+
+---
+-- dynamic C called from Haskell
+---
+
+data CDirHandle -- fuse_dirh_t
+type CDirFil = Ptr CDirHandle -> CString -> Int -> IO CInt -- fuse_dirfil_t
+foreign import ccall safe "dynamic"
+    mkDirFil :: FunPtr CDirFil -> CDirFil
+
+data CFillDirBuf -- void
+type CFillDir = Ptr CFillDirBuf -> CString -> Ptr CStat -> COff -> IO CInt
+
+foreign import ccall safe "dynamic"
+    mkFillDir :: FunPtr CFillDir -> CFillDir
+
+foreign import ccall safe "bzero"
+    bzero :: Ptr a -> Int -> IO ()
+
