@@ -1,0 +1,68 @@
+name: HFuse
+version: '0.2.5.0'
+synopsis: HFuse is a binding for the Linux FUSE library.
+description: Bindings for the FUSE library, compatible with Linux, OSXFUSE and FreeBSD.
+category: System
+author: Jeremy Bobbio
+maintainer: Montez Fitzpatrick <montezf@gmail.com>
+license: BSD3
+github: m15k/hfuse.git
+extra-source-files:
+- CHANGELOG.md
+- README.md
+library:
+  default-extensions:
+  - ForeignFunctionInterface
+  - ScopedTypeVariables
+  - EmptyDataDecls
+  cc-options: -D_FILE_OFFSET_BITS=64
+  extra-lib-dirs: /usr/local/lib
+  include-dirs:
+  - /usr/include
+  - /usr/local/include
+  - ./.
+  exposed-modules:
+  - System.Fuse
+  dependencies:
+  - base >=4 && <5
+  - unix
+  - bytestring
+  - mtl
+  when:
+  - condition: os(osx)
+    then:
+      cc-options:
+      - -DMACFUSE
+      - -DFUSE_USE_VERSION=26
+      include-dirs:
+      - /usr/local/include/osxfuse
+    else:
+      when:
+      - condition: os(freebsd)
+        cc-options: -Df_namelen=f_namemax
+  - condition: os(osx)
+    then:
+      extra-libraries: osxfuse
+    else:
+      extra-libraries: fuse
+executables:
+  HelloFS:
+    main: HelloFS.hs
+    source-dirs: examples
+    ghc-options: -threaded
+    when:
+    - condition: flag(developer)
+      then:
+        dependencies:
+        - base >=4 && <5
+        - HFuse
+        - unix
+        - bytestring
+      else:
+        buildable: false
+flags:
+  developer:
+    description: ""
+    manual: false
+    default: false
+stability: Experimental
