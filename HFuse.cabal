@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: dcbf9b809504ec63cb69f8eb4d0675d493e124f6f525582f08ff91703f64c6c6
+-- hash: 39336b7d064264c78dec0ad67f6c2e6221463a0ab968c6c2d358925560e1e322
 
 name:           HFuse
 version:        0.2.5.0
@@ -35,7 +35,7 @@ library
   exposed-modules:
       System.Fuse
       System.Fuse.Bindings
-      System.Fuse.Types
+      System.Fuse.Main
   other-modules:
       Paths_HFuse
   default-extensions: ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls DataKinds FlexibleContexts GADTs LambdaCase PolyKinds RankNTypes TypeApplications TypeOperators TypeFamilies
