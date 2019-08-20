@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d510f069f564e5b397b430d3027c85e71e85506b5dc9c663456f927b21365862
+-- hash: a41e4839635a855ad1da20931deafdd7600f675d6466056bb1f2e42556d46b78
 
 name:           HFuse
 version:        0.2.5.0
@@ -37,6 +37,7 @@ library
   other-modules:
       Paths_HFuse
   default-extensions: ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
+  ghc-options: -fplugin=Polysemy.Plugin
   cc-options: -D_FILE_OFFSET_BITS=64
   include-dirs:
       /usr/include
@@ -47,7 +48,8 @@ library
   build-depends:
       base >=4 && <5
     , bytestring
-    , mtl
+    , polysemy
+    , polysemy-plugin
     , unix
   if os(osx)
     cc-options: -DMACFUSE -DFUSE_USE_VERSION=26
@@ -70,7 +72,7 @@ executable HelloFS
       Paths_HFuse
   hs-source-dirs:
       examples
-  ghc-options: -threaded
+  ghc-options: -fplugin=Polysemy.Plugin -threaded
   if flag(developer)
     build-depends:
         HFuse

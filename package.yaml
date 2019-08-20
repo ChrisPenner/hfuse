@@ -10,11 +10,25 @@ github: m15k/hfuse.git
 extra-source-files:
 - CHANGELOG.md
 - README.md
+ghc-options:
+  - -fplugin=Polysemy.Plugin
+  - -O2 
+  - -flate-specialise 
+  - -fspecialise-aggressively
 library:
   default-extensions:
   - ForeignFunctionInterface
   - ScopedTypeVariables
   - EmptyDataDecls
+  - DataKinds
+  - FlexibleContexts
+  - GADTs
+  - LambdaCase
+  - PolyKinds
+  - RankNTypes
+  - TypeApplications
+  - TypeOperators
+  - TypeFamilies
   cc-options: -D_FILE_OFFSET_BITS=64
   extra-lib-dirs: /usr/local/lib
   include-dirs:
@@ -27,7 +41,8 @@ library:
   - base >=4 && <5
   - unix
   - bytestring
-  - mtl
+  - polysemy
+  - polysemy-plugin
   when:
   - condition: os(osx)
     then:
