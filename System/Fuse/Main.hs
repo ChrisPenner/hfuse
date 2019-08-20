@@ -33,19 +33,22 @@ import qualified System.Posix.Signals as Signals
 import GHC.IO.Handle(hDuplicateTo)
 import System.Exit
 
+import Polysemy
+
 import System.Fuse.Bindings
 
 -- Mounts the filesystem, forks, and then starts fuse
 fuseMainReal
-    :: Exception e
-    => Maybe (Fd -> IO () -> IO b, b -> IO (), Either String () -> IO a)
+    :: (Exception e, Member (Embed IO) r)
+    => (forall x. Sem r x -> IO x)
+    -> Maybe (Fd -> IO () -> IO b, b -> IO (), Either String () -> IO a)
     -> Bool
-    -> FuseOperations fh
+    -> FuseOperations fh (Sem r)
     -> (e -> IO Errno)
     -> Ptr CFuseArgs
     -> String
     -> IO a
-fuseMainReal inline foreground ops handler pArgs mountPt =
+fuseMainReal lowerSem inline foreground ops handler pArgs mountPt =
     let strategy = case inline of
             Just (register, unregister, act) -> runInline register unregister act
             Nothing -> if foreground
@@ -60,7 +63,9 @@ fuseMainReal inline foreground ops handler pArgs mountPt =
                     -- TODO: Add some way to notify the called application
                     -- whether fuse is up, or not
                     Just (_, _, act) -> act $ Left "Failed to create fuse handle"
-                else withStructFuse pFuseChan pArgs ops handler strategy
+                else do
+                    withStructFuse lowerSem pFuseChan pArgs ops handler strategy
+
     -- here, we're finally inside the daemon process, we can run the main loop
     where procMain pFuse = do
             session <- fuse_get_session pFuse
@@ -117,52 +122,79 @@ runInline register unregister act pFuse = bracket (callocBytes fuseBufSize) free
 --   * registers the operations ;
 --
 --   * calls FUSE event loop.
-fuseMain :: Exception e => FuseOperations fh -> (e -> IO Errno) -> IO ()
-fuseMain ops handler = do
+fuseMain :: (Exception e, (Member (Embed IO) r))
+         => (forall x. Sem r x -> IO x)
+         -> FuseOperations fh (Sem r)
+         -> (e -> IO Errno)
+         -> IO ()
+fuseMain lowerSem ops handler = do
     -- this used to be implemented using libfuse's fuse_main. Doing this will fork()
     -- from C behind the GHC runtime's back, which deadlocks in GHC 6.8.
     -- Instead, we reimplement fuse_main in Haskell using the forkProcess and the
     -- lower-level fuse_new/fuse_loop_mt API.
     prog <- getProgName
     args <- getArgs
-    fuseRun prog args ops handler
+    fuseRun lowerSem prog args ops handler
 
-fuseRun :: String -> [String] -> Exception e => FuseOperations fh -> (e -> IO Errno) -> IO ()
-fuseRun prog args ops handler =
+fuseRun :: (Member (Embed IO) r)
+        => (forall x. Sem r x -> IO x)
+        -> String
+        -> [String]
+        -> Exception e
+        => FuseOperations fh (Sem r)
+        -> (e -> IO Errno)
+        -> IO ()
+fuseRun lowerSem prog args ops handler =
     catch
        (withFuseArgs prog args (\pArgs ->
          do cmd <- fuseParseCommandLine pArgs
             case cmd of
               Nothing -> fail ""
               Just (Nothing, _, _) -> fail "Usage error: mount point required"
-              Just (Just mountPt, _, foreground) -> fuseMainReal Nothing foreground ops handler pArgs mountPt))
+              Just (Just mountPt, _, foreground) -> fuseMainReal lowerSem Nothing foreground ops handler pArgs mountPt))
        ((\errStr -> when (not $ null errStr) (putStrLn errStr) >> exitFailure) . ioeGetErrorString)
 
 -- | Inline version of 'fuseMain'. This prevents exiting and keeps the fuse
 -- file system in the same process (and therefore memory space)
-fuseMainInline :: Exception e => (Fd -> IO () -> IO b) -> (b -> IO ()) -> (Either String () -> IO a) -> FuseOperations fh -> (e -> IO Errno) -> IO a
-fuseMainInline register unregister act ops handler = do
+fuseMainInline :: (Exception e, (Member (Embed IO) r))
+               => (forall x. Sem r x -> IO x)
+               -> (Fd -> IO () -> IO b)
+               -> (b -> IO ())
+               -> (Either String () -> IO a)
+               -> FuseOperations fh (Sem r)
+               -> (e -> IO Errno)
+               -> IO a
+fuseMainInline lowerSem register unregister act ops handler = do
     -- this used to be implemented using libfuse's fuse_main. Doing this will fork()
     -- from C behind the GHC runtime's back, which deadlocks in GHC 6.8.
     -- Instead, we reimplement fuse_main in Haskell using the forkProcess and the
     -- lower-level fuse_new/fuse_loop_mt API.
     prog <- getProgName
     args <- getArgs
-    fuseRunInline register unregister act prog args ops handler
+    fuseRunInline lowerSem register unregister act prog args ops handler
 
-fuseRunInline :: Exception e => (Fd -> IO () -> IO b) -> (b -> IO ()) -> (Either String () -> IO a) -> String -> [String] -> FuseOperations fh -> (e -> IO Errno) -> IO a
-fuseRunInline register unregister act prog args ops handler =
+fuseRunInline :: (Exception e, (Member (Embed IO) r))
+              => (forall x. Sem r x -> IO x)
+              -> (Fd -> IO () -> IO b)
+              -> (b -> IO ())
+              -> (Either String () -> IO a)
+              -> String
+              -> [String]
+              -> FuseOperations fh (Sem r)
+              -> (e -> IO Errno)
+              -> IO a
+fuseRunInline lowerSem register unregister act prog args ops handler =
     catch (withFuseArgs prog args $ \pArgs -> do
         cmd <-fuseParseCommandLine pArgs
         case cmd of
             Nothing -> act $ Left ""
             Just (Nothing, _, _) -> act $ Left "Usage error: mount point required"
-            Just (Just mountPt, _, foreground) -> fuseMainReal (Just (register, unregister, act)) foreground ops handler pArgs mountPt)
+            Just (Just mountPt, _, foreground) -> fuseMainReal lowerSem (Just (register, unregister, act)) foreground ops handler pArgs mountPt)
        (act . Left . ioeGetErrorString)
 
 
 -- | Empty \/ default versions of the FUSE operations.
-defaultFuseOps :: FuseOperations fh
+defaultFuseOps :: FuseOperations fh IO
 defaultFuseOps =
     FuseOperations { fuseGetFileStat = \_ -> return (Left eNOSYS)
                    , fuseReadSymbolicLink = \_ -> return (Left eNOSYS)
